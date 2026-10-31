@@ -128,6 +128,22 @@ router.get('/groups', async (req, res) => {
 });
 
 /**
+ * PUT /api/groups/reorder - Reorder groups sequence
+ */
+router.put('/groups/reorder', async (req, res) => {
+  try {
+    const { orderedIds } = req.body;
+    if (!Array.isArray(orderedIds)) {
+      return res.status(400).json({ error: 'orderedIds array is required.' });
+    }
+    await indexManager.reorderGroups(orderedIds, req.user.id);
+    res.json({ success: true, message: 'Groups reordered successfully.' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
  * POST /api/groups - Create a new user group
  */
 router.post('/groups', async (req, res) => {
@@ -329,6 +345,22 @@ router.get('/collections', async (req, res) => {
     const scope = req.query.scope || 'all';
     const collections = await indexManager.getAllCollections(scope, req.user.id);
     res.json({ collections });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * PUT /api/collections/reorder - Reorder collections sequence
+ */
+router.put('/collections/reorder', async (req, res) => {
+  try {
+    const { orderedIds } = req.body;
+    if (!Array.isArray(orderedIds)) {
+      return res.status(400).json({ error: 'orderedIds array is required.' });
+    }
+    await indexManager.reorderCollections(orderedIds, req.user.id);
+    res.json({ success: true, message: 'Collections reordered successfully.' });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

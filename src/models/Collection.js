@@ -43,6 +43,10 @@ const CollectionSchema = new mongoose.Schema(
       enum: ['public', 'internal', 'confidential', 'strictly_confidential'],
       default: 'confidential',
     },
+    order: {
+      type: Number,
+      default: 0,
+    },
   },
   {
     timestamps: true,

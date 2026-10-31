@@ -289,7 +289,7 @@ class IndexManager {
         match.userId = userId;
       }
 
-      const collections = await CollectionModel.find(match).sort({ createdAt: -1 }).lean();
+      const collections = await CollectionModel.find(match).sort({ order: 1, createdAt: -1 }).lean();
 
       // Aggregate counts per collection for this user
       const docMatch = { collectionId: { $ne: null } };
@@ -313,6 +313,7 @@ class IndexManager {
 
     let cols = this.memoryCollections;
     if (userId) cols = cols.filter((c) => !c.userId || c.userId === userId);
+    cols.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
     return cols;
   }
 
@@ -510,6 +511,29 @@ class IndexManager {
   }
 
   /**
+   * Persist reordered sequence of collections for a user
+   */
+  async reorderCollections(orderedIds, userId = 'default_user') {
+    if (!Array.isArray(orderedIds) || orderedIds.length === 0) return true;
+    if (this.isMongoConnected) {
+      const bulkOps = orderedIds.map((id, index) => ({
+        updateOne: {
+          filter: { id, userId },
+          update: { $set: { order: index } },
+        },
+      }));
+      await CollectionModel.bulkWrite(bulkOps);
+      return true;
+    }
+    // In-memory reordering
+    orderedIds.forEach((id, index) => {
+      const col = this.memoryCollections.find((c) => c.id === id);
+      if (col) col.order = index;
+    });
+    return true;
+  }
+
+  /**
    * Move a document to a collection (or unassign to Inbox).
    * Validates target collection existence and synchronizes name and scope.
    */
@@ -683,7 +707,7 @@ class IndexManager {
         match.$or = [{ scope }, { scope: 'all' }];
       }
 
-      const groups = await GroupModel.find(match).sort({ createdAt: 1 }).lean();
+      const groups = await GroupModel.find(match).sort({ order: 1, createdAt: 1 }).lean();
 
       // Aggregate collections count per group
       const colAgg = await CollectionModel.aggregate([
@@ -742,6 +766,7 @@ class IndexManager {
     if (scope && scope !== 'all') {
       userGroups = userGroups.filter((g) => g.scope === scope || g.scope === 'all');
     }
+    userGroups.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
 
     return userGroups.map((g) => {
       const colCount = this.memoryCollections.filter((c) => c.userId === userId && c.groupId === g.id).length;
@@ -980,6 +1005,29 @@ class IndexManager {
     }
 
     this.memoryGroups.splice(idx, 1);
+    return true;
+  }
+
+  /**
+   * Persist reordered sequence of groups for a user
+   */
+  async reorderGroups(orderedIds, userId = 'default_user') {
+    if (!Array.isArray(orderedIds) || orderedIds.length === 0) return true;
+    if (this.isMongoConnected) {
+      const bulkOps = orderedIds.map((id, index) => ({
+        updateOne: {
+          filter: { id, userId },
+          update: { $set: { order: index } },
+        },
+      }));
+      await GroupModel.bulkWrite(bulkOps);
+      return true;
+    }
+    // In-memory fallback
+    orderedIds.forEach((id, index) => {
+      const grp = this.memoryGroups.find((g) => g.id === id && g.userId === userId);
+      if (grp) grp.order = index;
+    });
     return true;
   }
 
