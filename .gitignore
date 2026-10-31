@@ -1,0 +1,25 @@
+# Dependency directories
+node_modules/
+
+# Environment files with credentials (keep .env.example for reference)
+.env
+*.env
+.env.local
+.env.*.local
+!.env.example
+
+# Build outputs
+dist/
+build/
+
+# Cache and temporary directories
+.cache/
+.tmp/
+tmp/
+.vite/
+
+# Operating System files
+.DS_Store
+Thumbs.db
+*.log
+npm-debug.log*

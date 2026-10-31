@@ -1,0 +1,29 @@
+{
+  "name": "teledoc-hub-server",
+  "version": "1.0.0",
+  "description": "TeleDoc Hub Express Proxy & Telegram Storage Backend",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "test:vault": "node test_mongo_vault.js",
+    "test:collections": "node test_collections_and_any_file.js",
+    "test:crud": "node test_collection_crud.js"
+  },
+  "dependencies": {
+    "axios": "^1.7.9",
+    "bcryptjs": "^3.0.3",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "form-data": "^4.0.2",
+    "jsonwebtoken": "^9.0.3",
+    "jszip": "^3.10.2",
+    "mammoth": "^1.9.0",
+    "mongoose": "^9.11.4",
+    "multer": "^1.4.5-lts.1",
+    "papaparse": "^5.5.2",
+    "pdf-parse": "^1.1.1",
+    "xlsx": "^0.18.5"
+  }
+}
