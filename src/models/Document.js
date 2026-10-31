@@ -37,6 +37,7 @@ const DocumentSchema = new mongooseLib.Schema(
     collectionId: { type: String, default: null },
     collectionName: { type: String, default: 'Unassigned' },
     groupId: { type: String, default: null },
+    order: { type: Number, default: 0 },
 
     // Categorization & Scope
     scope: {

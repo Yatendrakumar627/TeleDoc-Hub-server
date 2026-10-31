@@ -87,13 +87,35 @@ function classifyDocument(filename, text = '', userOverrides = {}) {
     tags.add('engineering');
   }
 
-  // Extract explicit date if present in format YYYY-MM-DD or Month YYYY
+  // Extract explicit date if present in format DD.MM.YYYY, YYYY-MM-DD, or Month YYYY
   if (!userOverrides.documentDate) {
-    const yearMatch = combined.match(/\b(20[0-2][0-9])[-/.](0[1-9]|1[0-2])[-/.](0[1-9]|[12][0-9]|3[01])\b/);
-    if (yearMatch) {
-      const parsed = new Date(yearMatch[0]);
+    // 1. Check DD.MM.YYYY or DD-MM-YYYY or DD/MM/YYYY (e.g. 30.07.2024)
+    const dmyMatch = combined.match(/\b(0[1-9]|[12][0-9]|3[01])[-/.](0[1-9]|1[0-2])[-/.](20[0-2][0-9])\b/);
+    if (dmyMatch) {
+      const day = parseInt(dmyMatch[1], 10);
+      const month = parseInt(dmyMatch[2], 10) - 1;
+      const year = parseInt(dmyMatch[3], 10);
+      const parsed = new Date(year, month, day);
       if (!isNaN(parsed.getTime())) {
         documentDate = parsed;
+      }
+    } else {
+      // 2. Check YYYY-MM-DD or YYYY.MM.DD
+      const ymdMatch = combined.match(/\b(20[0-2][0-9])[-/.](0[1-9]|1[0-2])[-/.](0[1-9]|[12][0-9]|3[01])\b/);
+      if (ymdMatch) {
+        const parsed = new Date(ymdMatch[0]);
+        if (!isNaN(parsed.getTime())) {
+          documentDate = parsed;
+        }
+      } else {
+        // 3. Check Month Name and Year (e.g. Jul 2024, Oct 2026)
+        const monthYearMatch = combined.match(/\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s*(20[0-2][0-9])\b/i);
+        if (monthYearMatch) {
+          const parsed = new Date(`${monthYearMatch[1]} 1, ${monthYearMatch[2]}`);
+          if (!isNaN(parsed.getTime())) {
+            documentDate = parsed;
+          }
+        }
       }
     }
   }

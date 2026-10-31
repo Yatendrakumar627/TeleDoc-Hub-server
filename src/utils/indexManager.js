@@ -159,14 +159,15 @@ class IndexManager {
         ];
       }
 
-      const docs = await DocumentModel.find(query).sort({ 'temporal.documentDate': -1, createdAt: -1 }).lean();
+      const docs = await DocumentModel.find(query).sort({ order: 1, 'temporal.documentDate': -1, createdAt: -1 }).lean();
       return docs;
     }
 
     // Fallback: in-memory filter
-    return [...this.memoryDocs].sort(
-      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-    );
+    return [...this.memoryDocs].sort((a, b) => {
+      if ((a.order ?? 0) !== (b.order ?? 0)) return (a.order ?? 0) - (b.order ?? 0);
+      return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+    });
   }
 
   /**
@@ -271,6 +272,29 @@ class IndexManager {
       }
     }
 
+    return true;
+  }
+
+  /**
+   * Persist reordered sequence of documents for a user / collection
+   */
+  async reorderDocuments(orderedIds, userId = 'default_user') {
+    if (!Array.isArray(orderedIds) || orderedIds.length === 0) return true;
+    if (this.isMongoConnected) {
+      const bulkOps = orderedIds.map((id, index) => ({
+        updateOne: {
+          filter: { id, userId },
+          update: { $set: { order: index } },
+        },
+      }));
+      await DocumentModel.bulkWrite(bulkOps);
+      return true;
+    }
+    // In-memory reordering
+    orderedIds.forEach((id, index) => {
+      const doc = this.memoryDocs.find((d) => d.id === id);
+      if (doc) doc.order = index;
+    });
     return true;
   }
 

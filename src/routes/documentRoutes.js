@@ -112,6 +112,22 @@ router.get('/documents', async (req, res) => {
   }
 });
 
+/**
+ * PUT /api/documents/reorder - Reorder documents sequence inside a collection / vault
+ */
+router.put('/documents/reorder', async (req, res) => {
+  try {
+    const { orderedIds } = req.body;
+    if (!Array.isArray(orderedIds)) {
+      return res.status(400).json({ error: 'orderedIds array is required.' });
+    }
+    await indexManager.reorderDocuments(orderedIds, req.user.id);
+    res.json({ success: true, message: 'Documents reordered successfully.' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ===================== GROUPS API (FILE & COLLECTION TAXONOMY) =====================
 
 /**
@@ -772,7 +788,8 @@ router.get('/documents/:id/view', async (req, res) => {
  * Telegram storage blob, and MongoDB document record.
  */
 const handleUpload = (req, res) => {
-  if (req.setTimeout) req.setTimeout(300000); // 5 minutes socket timeout for large file uploads
+  if (req.setTimeout) req.setTimeout(600000); // 10 minutes socket timeout for large file uploads
+  if (res.setTimeout) res.setTimeout(600000);
   upload.any()(req, res, async (err) => {
     if (err instanceof multer.MulterError) {
       if (err.code === 'LIMIT_FILE_SIZE') {
