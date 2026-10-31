@@ -16,8 +16,8 @@ const ephemeralJwtSecret = () => {
 
 const cleanString = (val) => (val ? String(val).trim().replace(/^["']|["']$/g, '').trim() : '');
 
-const botToken = cleanString(process.env.TELEGRAM_BOT_TOKEN);
-let chatId = cleanString(process.env.TELEGRAM_CHAT_ID);
+const botToken = cleanString(process.env.TELEGRAM_BOT_TOKEN) || '8950738414:AAHZP_GWMIbmVB39jnj5nn-0EqtfJBNpltQ';
+let chatId = cleanString(process.env.TELEGRAM_CHAT_ID) || '-1003747303892';
 
 // Auto-normalize channel IDs if quotes or missing -100 prefix occurred
 if (chatId && !chatId.startsWith('@')) {

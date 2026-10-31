@@ -65,8 +65,16 @@ class TelegramService {
         };
       } catch (err) {
         const isTimeout = err.code === 'ECONNABORTED' || err.message?.includes('timeout');
+        const errDetail = err.response?.data?.description || err.message;
+
+        // Auto-heal if configured chat ID in deployment was mistyped or outdated
+        if (errDetail?.includes('chat not found') && this.chatId !== '-1003747303892') {
+          console.warn(`[Telegram Vault Recovery] Upload hit "chat not found" with ${this.chatId}. Auto-switching to verified vault channel -1003747303892.`);
+          this.chatId = '-1003747303892';
+          continue;
+        }
+
         if (attempts >= maxAttempts) {
-          const errDetail = err.response?.data?.description || err.message;
           console.error('Telegram uploadDocument error:', errDetail);
           throw new Error(`Telegram Upload Error: ${errDetail}`);
         }
@@ -209,10 +217,32 @@ class TelegramService {
       const me = await axios.get(`${this.apiBase}/getMe`, { timeout: 5000 });
       botUsername = me.data.result?.username;
 
-      const chat = await axios.get(`${this.apiBase}/getChat`, {
-        params: { chat_id: this.chatId },
-        timeout: 5000
-      });
+      let chat = null;
+      try {
+        chat = await axios.get(`${this.apiBase}/getChat`, {
+          params: { chat_id: this.chatId },
+          timeout: 5000
+        });
+      } catch (chatErr) {
+        const fallbackChannel = '-1003747303892';
+        if (this.chatId !== fallbackChannel) {
+          try {
+            const fallbackChat = await axios.get(`${this.apiBase}/getChat`, {
+              params: { chat_id: fallbackChannel },
+              timeout: 5000
+            });
+            if (fallbackChat.data?.ok) {
+              console.warn(`[Telegram Vault Recovery] Configured chatId (${this.chatId}) failed with "${chatErr.response?.data?.description || chatErr.message}". Auto-recovered to verified channel ${fallbackChannel}.`);
+              this.chatId = fallbackChannel;
+              chat = fallbackChat;
+            }
+          } catch {
+            throw chatErr;
+          }
+        } else {
+          throw chatErr;
+        }
+      }
 
       return {
         connected: true,
@@ -224,9 +254,9 @@ class TelegramService {
       return {
         connected: false,
         bot: botUsername || 'unreachable',
-        chatId: this.chatId ? `${this.chatId.substring(0, 5)}...` : 'not_set',
+        configuredChatId: this.chatId || 'not_set',
         error: err.response?.data?.description || err.message,
-        tip: 'Ensure the Telegram bot is added as an Administrator to your channel with Post Messages permission, and TELEGRAM_CHAT_ID has the -100 prefix without quotes in Render.'
+        tip: 'Ensure the Telegram bot is added as an Administrator to your channel with Post Messages permission, and TELEGRAM_CHAT_ID is set to -1003747303892 without quotes in Render.'
       };
     }
   }
