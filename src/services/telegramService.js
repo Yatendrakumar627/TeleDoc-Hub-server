@@ -204,8 +204,11 @@ class TelegramService {
    * Check connection status
    */
   async testConnection() {
+    let botUsername = null;
     try {
       const me = await axios.get(`${this.apiBase}/getMe`, { timeout: 5000 });
+      botUsername = me.data.result?.username;
+
       const chat = await axios.get(`${this.apiBase}/getChat`, {
         params: { chat_id: this.chatId },
         timeout: 5000
@@ -213,14 +216,17 @@ class TelegramService {
 
       return {
         connected: true,
-        bot: me.data.result.username,
-        channel: chat.data.result.title,
+        bot: botUsername,
+        channel: chat.data.result?.title,
         chatId: this.chatId
       };
     } catch (err) {
       return {
         connected: false,
-        error: err.response?.data?.description || err.message
+        bot: botUsername || 'unreachable',
+        chatId: this.chatId ? `${this.chatId.substring(0, 5)}...` : 'not_set',
+        error: err.response?.data?.description || err.message,
+        tip: 'Ensure the Telegram bot is added as an Administrator to your channel with Post Messages permission, and TELEGRAM_CHAT_ID has the -100 prefix without quotes in Render.'
       };
     }
   }
