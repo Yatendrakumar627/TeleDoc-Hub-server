@@ -524,6 +524,28 @@ router.post('/documents/batch-move', async (req, res) => {
 });
 
 /**
+ * POST /api/documents/batch-delete - Permanently remove multiple documents from MongoDB & Telegram
+ */
+router.post('/documents/batch-delete', async (req, res) => {
+  try {
+    const { documentIds } = req.body;
+    if (!Array.isArray(documentIds) || documentIds.length === 0) {
+      return res.status(400).json({ error: 'documentIds array is required.' });
+    }
+
+    const result = await indexManager.batchRemoveDocuments(documentIds, req.user?.id);
+    res.json({
+      success: true,
+      deletedCount: result.deletedCount,
+      message: `Permanently removed ${result.deletedCount} file(s) from database and Telegram.`,
+    });
+  } catch (err) {
+    console.error('Batch delete documents error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
  * PATCH /api/documents/:id - General update of document metadata
  */
 router.patch('/documents/:id', async (req, res) => {
@@ -584,19 +606,21 @@ router.get('/documents/:id', async (req, res) => {
       return res.status(404).json({ error: 'Document not found' });
     }
 
-    // 1. Download buffer from Telegram using fileId
-    let buffer = await telegramService.downloadFile(docMeta.telegramFileId);
-
-    // 2. Decrypt if encrypted in Zero-Knowledge Vault
-    if (docMeta.security?.isEncrypted && docMeta.security?.iv && docMeta.security?.authTag) {
-      try {
-        buffer = decryptBuffer(buffer, docMeta.security.iv, docMeta.security.authTag);
-      } catch (decryptErr) {
-        console.error('Decryption error for doc', id, decryptErr.message);
-        return res.status(500).json({
-          error: `Zero-Knowledge Decryption Failed: Integrity check mismatch or invalid key.`,
-        });
+    // 1. Check ephemeral decrypted media buffer in RAM first (<1ms response)
+    let buffer = getCachedDecryptedBuffer(id);
+    if (!buffer) {
+      buffer = await telegramService.downloadFile(docMeta.telegramFileId);
+      if (docMeta.security?.isEncrypted && docMeta.security?.iv && docMeta.security?.authTag) {
+        try {
+          buffer = decryptBuffer(buffer, docMeta.security.iv, docMeta.security.authTag);
+        } catch (decryptErr) {
+          console.error('Decryption error for doc', id, decryptErr.message);
+          return res.status(500).json({
+            error: `Zero-Knowledge Decryption Failed: Integrity check mismatch or invalid key.`,
+          });
+        }
       }
+      setCachedDecryptedBuffer(id, buffer);
     }
 
     // 3. Parse according to type
@@ -821,6 +845,14 @@ const handleUpload = (req, res) => {
       const createdDocs = [];
       const parsedList = [];
 
+      // Pre-resolve target collection if provided to synchronize hierarchy (group, scope)
+      let resolvedCol = null;
+      if (req.body.collectionId && req.body.collectionId !== 'unassigned') {
+        try {
+          resolvedCol = await indexManager.getCollectionById(req.body.collectionId);
+        } catch (_) {}
+      }
+
       // Process each file sequentially to avoid Telegram API 429 rate limits
       for (let i = 0; i < rawFiles.length; i++) {
         const file = rawFiles[i];
@@ -945,9 +977,10 @@ const handleUpload = (req, res) => {
           warning: parsed.warning || null,
           previewSnippet: snippet,
           checksumSha256: checksum,
-          collectionId: req.body.collectionId || null,
-          collectionName: req.body.collectionName || 'Unassigned',
-          scope: classification.scope,
+          collectionId: resolvedCol ? resolvedCol.id : (req.body.collectionId || null),
+          collectionName: resolvedCol ? resolvedCol.name : (req.body.collectionName || 'Unassigned'),
+          groupId: resolvedCol?.groupId || req.body.groupId || null,
+          scope: resolvedCol?.scope || classification.scope,
           security: {
             level: classification.securityLevel,
             isEncrypted: encryptionMeta.isEncrypted,
@@ -960,7 +993,7 @@ const handleUpload = (req, res) => {
             month: classification.documentDate.getMonth() + 1,
           },
           taxonomy: {
-            group: classification.group,
+            group: resolvedCol?.groupName || classification.group,
             subGroup: classification.subGroup,
             tags: classification.tags,
           },

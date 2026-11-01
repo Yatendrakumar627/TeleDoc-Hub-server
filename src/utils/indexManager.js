@@ -257,6 +257,7 @@ class IndexManager {
       doc = await DocumentModel.findOne({ id }).lean();
       if (!doc) return false;
       await DocumentModel.deleteOne({ id });
+      this.memoryDocs = this.memoryDocs.filter((d) => d.id !== id);
     } else {
       doc = this.memoryDocs.find((d) => d.id === id);
       if (!doc) return false;
@@ -498,20 +499,39 @@ class IndexManager {
   async deleteCollection(id, { cascade = false } = {}) {
     if (this.isMongoConnected) {
       if (cascade) {
-        // Find and delete every document (including Telegram binary)
+        // Find all documents in collection to collect Telegram message IDs
         const docs = await DocumentModel.find({ collectionId: id }).lean();
-        for (const doc of docs) {
-          await this.removeDocument(doc.id);
-        }
+        const tgMessageIds = docs.filter((d) => d.telegramMessageId).map((d) => d.telegramMessageId);
+
+        // 1. Atomically delete all documents from MongoDB in one batch query
+        await DocumentModel.deleteMany({ collectionId: id });
+        this.memoryDocs = this.memoryDocs.filter((d) => d.collectionId !== id);
+
+        // 2. Clean up Telegram messages asynchronously in background without blocking response
+        Promise.allSettled(
+          tgMessageIds.map((msgId) =>
+            telegramService.deleteMessage(msgId).catch((tgErr) =>
+              console.warn(`[IndexManager] Notice: Telegram message ${msgId} cleanup skipped:`, tgErr.message)
+            )
+          )
+        ).catch(() => {});
       } else {
         // Unassign to Inbox
         await DocumentModel.updateMany(
           { collectionId: id },
-          { $set: { collectionId: null, collectionName: 'Unassigned' } }
+          { $set: { collectionId: null, collectionName: 'Unassigned', groupId: null } }
         );
+        this.memoryDocs.forEach((d) => {
+          if (d.collectionId === id) {
+            d.collectionId = null;
+            d.collectionName = 'Unassigned';
+            d.groupId = null;
+          }
+        });
       }
 
       await CollectionModel.deleteOne({ id });
+      this.memoryCollections = this.memoryCollections.filter((c) => c.id !== id);
       return true;
     }
 
@@ -526,6 +546,7 @@ class IndexManager {
         if (d.collectionId === id) {
           d.collectionId = null;
           d.collectionName = 'Unassigned';
+          d.groupId = null;
         }
       });
     }
@@ -565,6 +586,8 @@ class IndexManager {
     let targetCollectionId = null;
     let targetCollectionName = 'Unassigned';
     let targetScope = null;
+    let targetGroupId = null;
+    let targetGroupName = null;
 
     if (collectionId && collectionId !== 'unassigned' && collectionId !== '') {
       if (this.isMongoConnected) {
@@ -575,12 +598,16 @@ class IndexManager {
         targetCollectionId = col.id;
         targetCollectionName = col.name;
         targetScope = col.scope;
+        targetGroupId = col.groupId || null;
+        targetGroupName = col.groupName || null;
       } else {
         const col = this.memoryCollections.find((c) => c.id === collectionId);
         if (col) {
           targetCollectionId = col.id;
           targetCollectionName = col.name;
           targetScope = col.scope;
+          targetGroupId = col.groupId || null;
+          targetGroupName = col.groupName || null;
         }
       }
     }
@@ -588,10 +615,14 @@ class IndexManager {
     const updates = {
       collectionId: targetCollectionId,
       collectionName: targetCollectionName,
+      groupId: targetGroupId,
     };
 
     if (targetScope) {
       updates.scope = targetScope;
+    }
+    if (targetGroupName) {
+      updates['taxonomy.group'] = targetGroupName;
     }
 
     return await this.updateDocument(docId, updates);
@@ -606,6 +637,8 @@ class IndexManager {
     let targetCollectionId = null;
     let targetCollectionName = 'Unassigned';
     let targetScope = null;
+    let targetGroupId = null;
+    let targetGroupName = null;
 
     if (collectionId && collectionId !== 'unassigned' && collectionId !== '') {
       if (this.isMongoConnected) {
@@ -616,12 +649,16 @@ class IndexManager {
         targetCollectionId = col.id;
         targetCollectionName = col.name;
         targetScope = col.scope;
+        targetGroupId = col.groupId || null;
+        targetGroupName = col.groupName || null;
       } else {
         const col = this.memoryCollections.find((c) => c.id === collectionId);
         if (col) {
           targetCollectionId = col.id;
           targetCollectionName = col.name;
           targetScope = col.scope;
+          targetGroupId = col.groupId || null;
+          targetGroupName = col.groupName || null;
         }
       }
     }
@@ -629,9 +666,13 @@ class IndexManager {
     const updates = {
       collectionId: targetCollectionId,
       collectionName: targetCollectionName,
+      groupId: targetGroupId,
     };
     if (targetScope) {
       updates.scope = targetScope;
+    }
+    if (targetGroupName) {
+      updates['taxonomy.group'] = targetGroupName;
     }
 
     if (this.isMongoConnected) {
@@ -653,6 +694,42 @@ class IndexManager {
       }
     });
     return { modifiedCount: count, collectionName: targetCollectionName };
+  }
+
+  /**
+   * Batch permanently remove multiple documents from MongoDB and Telegram
+   */
+  async batchRemoveDocuments(docIds = [], userId = null) {
+    if (!Array.isArray(docIds) || docIds.length === 0) return { deletedCount: 0 };
+
+    if (this.isMongoConnected) {
+      const query = { id: { $in: docIds } };
+      if (userId) query.userId = userId;
+
+      const docs = await DocumentModel.find(query).lean();
+      const tgMessageIds = docs.filter((d) => d.telegramMessageId).map((d) => d.telegramMessageId);
+
+      const res = await DocumentModel.deleteMany(query);
+      const deletedIds = new Set(docs.map((d) => d.id));
+      this.memoryDocs = this.memoryDocs.filter((d) => !deletedIds.has(d.id));
+
+      // Asynchronously clean Telegram messages in background
+      Promise.allSettled(
+        tgMessageIds.map((msgId) =>
+          telegramService.deleteMessage(msgId).catch((tgErr) =>
+            console.warn(`[IndexManager] Notice: Telegram message ${msgId} cleanup skipped:`, tgErr.message)
+          )
+        )
+      ).catch(() => {});
+
+      return { deletedCount: res.deletedCount || docs.length };
+    }
+
+    // In-memory fallback
+    const idsSet = new Set(docIds);
+    const beforeCount = this.memoryDocs.length;
+    this.memoryDocs = this.memoryDocs.filter((d) => !idsSet.has(d.id));
+    return { deletedCount: beforeCount - this.memoryDocs.length };
   }
 
   // ===================== ANALYTICS =====================
@@ -977,20 +1054,41 @@ class IndexManager {
       const group = await GroupModel.findOne({ id, userId });
       if (!group) return false;
 
+      // Find all member collections of this group
+      const memberCols = await CollectionModel.find({ groupId: id, userId }).lean();
+      const memberColIds = memberCols.map((c) => c.id);
+
       if (cascade) {
         // Cascade delete: delete member collections & documents
-        const docs = await DocumentModel.find({ groupId: id, userId }).lean();
-        for (const doc of docs) {
-          if (doc.telegramMessageId) {
-            try {
-              await telegramService.deleteMessage(doc.telegramMessageId);
-            } catch (tgErr) {
-              console.warn(`Telegram deleteMessage (${doc.telegramMessageId}) warning:`, tgErr.message);
-            }
-          }
+        // Catch all documents either assigned directly to groupId OR inside member collections of this group
+        const docConditions = [{ groupId: id }];
+        if (memberColIds.length > 0) {
+          docConditions.push({ collectionId: { $in: memberColIds } });
         }
-        await DocumentModel.deleteMany({ groupId: id, userId });
+        const docQuery = { userId, $or: docConditions };
+
+        const docs = await DocumentModel.find(docQuery).lean();
+        const tgMessageIds = docs.filter((d) => d.telegramMessageId).map((d) => d.telegramMessageId);
+
+        // 1. Atomically delete all documents from MongoDB
+        await DocumentModel.deleteMany(docQuery);
+        // 2. Atomically delete all member collections from MongoDB
         await CollectionModel.deleteMany({ groupId: id, userId });
+
+        // Clean in-memory caches
+        this.memoryDocs = this.memoryDocs.filter(
+          (d) => d.groupId !== id && !memberColIds.includes(d.collectionId)
+        );
+        this.memoryCollections = this.memoryCollections.filter((c) => c.groupId !== id);
+
+        // 3. Clean up Telegram messages asynchronously in background
+        Promise.allSettled(
+          tgMessageIds.map((msgId) =>
+            telegramService.deleteMessage(msgId).catch((tgErr) =>
+              console.warn(`[IndexManager] Notice: Telegram message ${msgId} cleanup skipped:`, tgErr.message)
+            )
+          )
+        ).catch(() => {});
       } else {
         // Safe disband: reset collections & documents to General
         await CollectionModel.updateMany(
@@ -1001,9 +1099,23 @@ class IndexManager {
           { groupId: id, userId },
           { $set: { groupId: null, 'taxonomy.group': 'general' } }
         );
+
+        this.memoryCollections.forEach((c) => {
+          if (c.groupId === id) {
+            c.groupId = null;
+            c.groupName = 'General';
+          }
+        });
+        this.memoryDocs.forEach((d) => {
+          if (d.groupId === id) {
+            d.groupId = null;
+            if (d.taxonomy) d.taxonomy.group = 'general';
+          }
+        });
       }
 
       await GroupModel.deleteOne({ id, userId });
+      this.memoryGroups = this.memoryGroups.filter((g) => g.id !== id);
       return true;
     }
 

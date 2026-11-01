@@ -384,8 +384,10 @@ class ParserService {
    */
   parseImage(buffer, ext, mimeType) {
     const finalMime = mimeType || `image/${ext === 'svg' ? 'svg+xml' : ext}`;
-    const base64 = buffer.toString('base64');
-    const dataUrl = `data:${finalMime};base64,${base64}`;
+    // High-performance optimization: Only encode dataUrl for small images / icons (< 256 KB)
+    // Larger images stream directly via /view, preventing multi-megabyte JSON payloads and V8 heap bloat
+    const isSmall = buffer.length < 256 * 1024;
+    const dataUrl = isSmall ? `data:${finalMime};base64,${buffer.toString('base64')}` : null;
 
     return {
       format: 'image',
