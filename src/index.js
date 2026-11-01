@@ -8,50 +8,29 @@ const telegramService = require('./services/telegramService');
 const app = express();
 
 // Middlewares
-// 1. Bulletproof Cross-Origin Resource Sharing (CORS) Configuration
-// Dynamically accepts all origins, all requested headers, and handles all preflights
-const corsOptions = {
-  origin: true, // Echoes the requesting origin (Vercel, localhost, custom domains)
-  credentials: true,
-  methods: ['GET', 'HEAD', 'PUT', 'PATCH', 'POST', 'DELETE', 'OPTIONS'],
-  // Do NOT restrict allowedHeaders to a static array; allow whatever headers the client/browser requests
-  allowedHeaders: (req) => req.headers['access-control-request-headers'] || [
-    'Content-Type',
-    'Authorization',
-    'X-Requested-With',
-    'Accept',
-    'Origin',
-    'Range',
-    'X-File-Name',
-  ],
-  exposedHeaders: [
-    'Content-Range',
-    'Accept-Ranges',
-    'Content-Length',
-    'Content-Disposition',
-    'ETag',
-  ],
-  maxAge: 86400, // Cache preflight for 24 hours to eliminate repetitive OPTIONS requests
-  optionsSuccessStatus: 204,
-};
-
-// 2. High-priority CORS & Preflight Response Interceptor
+// 1. High-priority CORS & Preflight Response Interceptor
 // Runs before all routes, body parsers, and error handlers to guarantee CORS headers on every response
 app.use((req, res, next) => {
-  const origin = req.headers.origin || '*';
-  res.setHeader('Access-Control-Allow-Origin', origin);
-  res.setHeader('Access-Control-Allow-Credentials', 'true');
-  res.setHeader('Access-Control-Allow-Methods', 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS');
-  res.setHeader(
-    'Access-Control-Allow-Headers',
-    req.headers['access-control-request-headers'] ||
-      'Content-Type,Authorization,X-Requested-With,Accept,Origin,Range,X-File-Name'
-  );
-  res.setHeader(
-    'Access-Control-Expose-Headers',
-    'Content-Range,Accept-Ranges,Content-Length,Content-Disposition,ETag'
-  );
-  res.setHeader('Access-Control-Max-Age', '86400');
+  const origin = req.headers.origin;
+  if (origin) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    res.setHeader('Access-Control-Allow-Methods', 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS');
+    const requestedHeaders = req.headers['access-control-request-headers'];
+    if (requestedHeaders) {
+      res.setHeader('Access-Control-Allow-Headers', requestedHeaders);
+    } else {
+      res.setHeader(
+        'Access-Control-Allow-Headers',
+        'Content-Type,Authorization,X-Requested-With,Accept,Origin,Range,X-File-Name'
+      );
+    }
+    res.setHeader(
+      'Access-Control-Expose-Headers',
+      'Content-Range,Accept-Ranges,Content-Length,Content-Disposition,ETag'
+    );
+    res.setHeader('Access-Control-Max-Age', '86400');
+  }
 
   // Immediately terminate preflight OPTIONS requests with 204 No Content
   if (req.method === 'OPTIONS') {
@@ -59,6 +38,22 @@ app.use((req, res, next) => {
   }
   next();
 });
+
+// 2. Standard CORS middleware (defaults to auto-reflecting requested headers when allowedHeaders is omitted)
+const corsOptions = {
+  origin: true, // Echoes the requesting origin (Vercel, localhost, custom domains)
+  credentials: true,
+  methods: ['GET', 'HEAD', 'PUT', 'PATCH', 'POST', 'DELETE', 'OPTIONS'],
+  exposedHeaders: [
+    'Content-Range',
+    'Accept-Ranges',
+    'Content-Length',
+    'Content-Disposition',
+    'ETag',
+  ],
+  maxAge: 86400,
+  optionsSuccessStatus: 204,
+};
 
 app.use(cors(corsOptions));
 app.options('*', cors(corsOptions));
