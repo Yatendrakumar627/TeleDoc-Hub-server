@@ -8,9 +8,64 @@ const telegramService = require('./services/telegramService');
 const app = express();
 
 // Middlewares
-app.use(cors());
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+// 1. Enterprise Robust Cross-Origin Resource Sharing (CORS) Configuration
+const corsOptions = {
+  origin: (origin, callback) => {
+    // Always allow requests without origin (curl, server-to-server, mobile native)
+    if (!origin) return callback(null, true);
+    // Dynamically allow requesting origin (Vercel, localhost, preview deployments)
+    callback(null, true);
+  },
+  credentials: true,
+  methods: ['GET', 'HEAD', 'PUT', 'PATCH', 'POST', 'DELETE', 'OPTIONS'],
+  allowedHeaders: [
+    'Content-Type',
+    'Authorization',
+    'X-Requested-With',
+    'Accept',
+    'Origin',
+    'Range',
+    'X-File-Name',
+  ],
+  exposedHeaders: [
+    'Content-Range',
+    'Accept-Ranges',
+    'Content-Length',
+    'Content-Disposition',
+    'ETag',
+  ],
+  maxAge: 86400, // Cache preflight for 24 hours to eliminate repetitive OPTIONS requests
+  optionsSuccessStatus: 204,
+};
+
+app.use(cors(corsOptions));
+app.options('*', cors(corsOptions));
+
+// 2. Guaranteed CORS & Preflight Response Fallback (handles all routes and errors)
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  if (origin) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    res.setHeader('Access-Control-Allow-Methods', 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS');
+    res.setHeader(
+      'Access-Control-Allow-Headers',
+      'Content-Type,Authorization,X-Requested-With,Accept,Origin,Range,X-File-Name'
+    );
+    res.setHeader(
+      'Access-Control-Expose-Headers',
+      'Content-Range,Accept-Ranges,Content-Length,Content-Disposition,ETag'
+    );
+  }
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(204);
+  }
+  next();
+});
+
+// 3. Body parsers
+app.use(express.json({ limit: '25mb' }));
+app.use(express.urlencoded({ extended: true, limit: '25mb' }));
 
 // API Routes
 app.use('/api/auth', require('./routes/authRoutes'));
@@ -25,9 +80,14 @@ app.get('/', (req, res) => {
   });
 });
 
-// Error handling middleware
+// Error handling middleware (preserves CORS headers on all errors)
 app.use((err, req, res, next) => {
   console.error('[TeleDoc Server Error]:', err.stack || err.message);
+  const origin = req.headers.origin;
+  if (origin) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+  }
   res.status(err.status || 500).json({
     error: err.message || 'Internal Server Error'
   });
