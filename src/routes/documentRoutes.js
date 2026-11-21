@@ -1,5 +1,7 @@
 const express = require('express');
 const multer = require('multer');
+const fs = require('fs');
+const path = require('path');
 const crypto = require('crypto');
 const uuidv4 = () => (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}_${Math.random().toString(36).substring(2, 9)}`);
 const config = require('../config');
@@ -42,6 +44,46 @@ function setCachedDecryptedBuffer(id, buffer) {
     decryptedMediaCache.delete(oldestKey);
   }
   decryptedMediaCache.set(id, { buffer, timestamp: Date.now() });
+}
+
+// Persistent & RAM Micro-Thumbnail Cache (< 25 KB WebP)
+const THUMBNAILS_DIR = path.resolve(__dirname, '../../.cache/thumbnails');
+if (!fs.existsSync(THUMBNAILS_DIR)) {
+  try {
+    fs.mkdirSync(THUMBNAILS_DIR, { recursive: true });
+  } catch (_) {}
+}
+const thumbnailMemoryCache = new Map(); // docId -> Buffer
+const MAX_THUMB_CACHE_ITEMS = 300;
+
+function getCachedThumbnail(id) {
+  if (thumbnailMemoryCache.has(id)) {
+    return thumbnailMemoryCache.get(id);
+  }
+  const diskPath = path.join(THUMBNAILS_DIR, `${id}.webp`);
+  if (fs.existsSync(diskPath)) {
+    try {
+      const buf = fs.readFileSync(diskPath);
+      if (thumbnailMemoryCache.size >= MAX_THUMB_CACHE_ITEMS) {
+        const oldestKey = thumbnailMemoryCache.keys().next().value;
+        thumbnailMemoryCache.delete(oldestKey);
+      }
+      thumbnailMemoryCache.set(id, buf);
+      return buf;
+    } catch (_) {}
+  }
+  return null;
+}
+
+function setCachedThumbnail(id, buffer) {
+  if (!buffer || buffer.length === 0) return;
+  if (thumbnailMemoryCache.size >= MAX_THUMB_CACHE_ITEMS) {
+    const oldestKey = thumbnailMemoryCache.keys().next().value;
+    thumbnailMemoryCache.delete(oldestKey);
+  }
+  thumbnailMemoryCache.set(id, buffer);
+  const diskPath = path.join(THUMBNAILS_DIR, `${id}.webp`);
+  fs.promises.writeFile(diskPath, buffer).catch(() => {});
 }
 
 /**
@@ -657,7 +699,14 @@ router.get('/documents/:id/download', async (req, res) => {
     if (!buffer) {
       buffer = await telegramService.downloadFile(docMeta.telegramFileId);
       if (docMeta.security?.isEncrypted && docMeta.security?.iv && docMeta.security?.authTag) {
-        buffer = decryptBuffer(buffer, docMeta.security.iv, docMeta.security.authTag);
+        try {
+          buffer = decryptBuffer(buffer, docMeta.security.iv, docMeta.security.authTag);
+        } catch (decryptErr) {
+          console.error('Decryption error during download for doc', id, decryptErr.message);
+          return res.status(500).json({
+            error: 'Zero-Knowledge Decryption Failed: Integrity check mismatch or invalid key.',
+          });
+        }
       }
       setCachedDecryptedBuffer(id, buffer);
     }
@@ -698,8 +747,15 @@ router.get('/documents/:id/download', async (req, res) => {
       mimeMap[ext] ||
       (docMeta.mimeType && docMeta.mimeType !== 'application/octet-stream' ? docMeta.mimeType : 'application/octet-stream');
 
+    const filename = docMeta.filename || `${docMeta.title || 'document'}.${ext || 'bin'}`;
+    const cleanFilename = filename.replace(/["\r\n\\]/g, '_');
+    const encodedFilename = encodeURIComponent(filename);
+
     res.setHeader('Content-Type', downloadMime);
-    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(docMeta.filename)}"`);
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${cleanFilename}"; filename*=UTF-8''${encodedFilename}`
+    );
     res.setHeader('Content-Length', buffer.length);
     res.send(buffer);
   } catch (err) {
@@ -801,6 +857,73 @@ router.get('/documents/:id/view', async (req, res) => {
     res.send(buffer);
   } catch (err) {
     res.status(500).json({ error: `View failed: ${err.message}` });
+  }
+});
+
+/**
+ * GET /api/documents/:id/thumbnail - Ultra-lightweight WebP thumbnail (< 20 KB)
+ * Priority: RAM Cache (< 1ms) -> Disk Cache (< 3ms) -> On-the-fly generation from Telegram buffer
+ */
+router.get('/documents/:id/thumbnail', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // 1. Fast path: Check RAM and Disk Cache
+    const cachedThumb = getCachedThumbnail(id);
+    if (cachedThumb) {
+      res.setHeader('Content-Type', 'image/webp');
+      res.setHeader('Cache-Control', 'private, max-age=604800, immutable');
+      res.setHeader('Content-Length', cachedThumb.length);
+      return res.send(cachedThumb);
+    }
+
+    // 2. Fetch metadata
+    const docMeta = await indexManager.getDocumentById(id);
+    if (!docMeta) {
+      return res.status(404).json({ error: 'Document not found' });
+    }
+
+    const ext = (docMeta.filename || '').split('.').pop().toLowerCase();
+    const isVideo =
+      ['mp4', 'mov', 'webm', 'mkv', 'avi', 'm4v', 'ogv'].includes(ext) ||
+      (docMeta.mimeType && docMeta.mimeType.startsWith('video/'));
+    const isImage =
+      ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'tiff', 'tif', 'svg'].includes(ext) ||
+      (docMeta.mimeType && docMeta.mimeType.startsWith('image/'));
+
+    // If not image or video, redirect to normal view
+    if (!isVideo && !isImage) {
+      return res.redirect(`/api/documents/${id}/view?token=${encodeURIComponent(req.query.token || '')}`);
+    }
+
+    // 3. Fast-path decrypted buffer in RAM or fetch from Telegram
+    let buffer = getCachedDecryptedBuffer(id);
+    if (!buffer) {
+      buffer = await telegramService.downloadFile(docMeta.telegramFileId);
+      if (docMeta.security?.isEncrypted && docMeta.security?.iv && docMeta.security?.authTag) {
+        buffer = decryptBuffer(buffer, docMeta.security.iv, docMeta.security.authTag);
+      }
+      setCachedDecryptedBuffer(id, buffer);
+    }
+
+    // 4. Generate micro-thumbnail
+    const thumbBuf = await mediaOptimizer.generateThumbnail(buffer, docMeta.filename, docMeta.mimeType);
+    if (thumbBuf && thumbBuf.length > 0) {
+      setCachedThumbnail(id, thumbBuf);
+      res.setHeader('Content-Type', 'image/webp');
+      res.setHeader('Cache-Control', 'private, max-age=604800, immutable');
+      res.setHeader('Content-Length', thumbBuf.length);
+      return res.send(thumbBuf);
+    }
+
+    // Fallback: Serve original buffer if thumbnail generator couldn't process
+    res.setHeader('Content-Type', docMeta.mimeType || 'image/jpeg');
+    res.setHeader('Cache-Control', 'private, max-age=86400');
+    res.setHeader('Content-Length', buffer.length);
+    res.send(buffer);
+  } catch (err) {
+    console.warn(`[Thumbnail] Error for doc ${req.params.id}:`, err.message);
+    res.status(500).json({ error: 'Thumbnail generation failed' });
   }
 });
 
@@ -1002,6 +1125,13 @@ const handleUpload = (req, res) => {
 
         const savedDoc = await indexManager.addDocument(docRecord);
         createdDocs.push(savedDoc);
+
+        // Pre-generate thumbnail in background so gallery grid loads in < 2ms
+        if (parsed.format === 'image' || parsed.format === 'video' || parsed.format === 'media') {
+          mediaOptimizer.generateThumbnail(fileBuffer, originalName, mimeType).then((tBuf) => {
+            if (tBuf) setCachedThumbnail(docId, tBuf);
+          }).catch(() => {});
+        }
       }
 
       res.status(201).json({

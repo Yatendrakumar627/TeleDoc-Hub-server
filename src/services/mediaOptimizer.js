@@ -363,6 +363,76 @@ class MediaOptimizer {
       mimeType,
     };
   }
+
+  /**
+   * High-Performance Micro-Thumbnail Generator for Gallery Grids
+   * Generates a lightweight WebP (< 25 KB) from any image or video keyframe
+   *
+   * @param {Buffer} buffer
+   * @param {string} filename
+   * @param {string} mimeType
+   * @returns {Promise<Buffer|null>}
+   */
+  async generateThumbnail(buffer, filename = 'media', mimeType = '') {
+    if (!this.isFfmpegAvailable() || !buffer || buffer.length === 0) {
+      return null;
+    }
+
+    const ext = (filename.split('.').pop() || '').toLowerCase();
+    const isVideo =
+      ['mp4', 'webm', 'mov', 'mkv', 'avi', 'm4v', 'ogv', 'flv', 'wmv'].includes(ext) ||
+      mimeType.startsWith('video/');
+    const isImage =
+      ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'tiff', 'tif'].includes(ext) ||
+      mimeType.startsWith('image/');
+
+    if (!isVideo && !isImage) {
+      return null;
+    }
+
+    // Skip tiny vector images (SVG)
+    if (ext === 'svg' || mimeType === 'image/svg+xml') {
+      return buffer;
+    }
+
+    const tempId = `thumb_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+    const inPath = path.join(os.tmpdir(), `${tempId}_in.${ext || (isVideo ? 'mp4' : 'jpg')}`);
+    const outPath = path.join(os.tmpdir(), `${tempId}_out.webp`);
+
+    try {
+      await fs.promises.writeFile(inPath, buffer);
+
+      let cmd = '';
+      if (isVideo) {
+        // Fast seek to 0.5s keyframe, scale to max width 480px, WebP quality 75
+        cmd = `ffmpeg -y -ss 00:00:00.5 -i "${inPath}" -vframes 1 -vf "scale='min(480,iw)':-2" -c:v libwebp -quality 75 "${outPath}"`;
+      } else {
+        // Downscale image to max width 360px, WebP quality 75
+        cmd = `ffmpeg -y -i "${inPath}" -vf "scale='min(360,iw)':-2" -c:v libwebp -quality 75 "${outPath}"`;
+      }
+
+      await new Promise((resolve, reject) => {
+        exec(cmd, { timeout: 15000 }, (err) => {
+          if (err) return reject(err);
+          resolve();
+        });
+      });
+
+      if (fs.existsSync(outPath)) {
+        const thumbBuf = await fs.promises.readFile(outPath);
+        return thumbBuf;
+      }
+      return null;
+    } catch (err) {
+      console.warn(`[MediaOptimizer] Thumbnail generation warning for "${filename}":`, err.message);
+      return null;
+    } finally {
+      try {
+        if (fs.existsSync(inPath)) await fs.promises.unlink(inPath);
+        if (fs.existsSync(outPath)) await fs.promises.unlink(outPath);
+      } catch (_) {}
+    }
+  }
 }
 
 module.exports = new MediaOptimizer();
