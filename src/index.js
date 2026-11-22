@@ -12,6 +12,7 @@ const app = express();
 // Runs before all routes, body parsers, and error handlers to guarantee CORS headers on every response
 app.use((req, res, next) => {
   const origin = req.headers.origin;
+  res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
   if (origin) {
     res.setHeader('Access-Control-Allow-Origin', origin);
     res.setHeader('Access-Control-Allow-Credentials', 'true');
@@ -30,6 +31,8 @@ app.use((req, res, next) => {
       'Content-Range,Accept-Ranges,Content-Length,Content-Disposition,ETag'
     );
     res.setHeader('Access-Control-Max-Age', '86400');
+  } else {
+    res.setHeader('Access-Control-Allow-Origin', '*');
   }
 
   // Immediately terminate preflight OPTIONS requests with 204 No Content

@@ -844,6 +844,8 @@ router.get('/documents/:id/view', async (req, res) => {
         'Content-Disposition': `inline; filename="${encodeURIComponent(docMeta.filename)}"`,
         'Cache-Control': 'private, max-age=86400',
         'ETag': `"${docMeta.checksumSha256 || docMeta.id}"`,
+        'Cross-Origin-Resource-Policy': 'cross-origin',
+        'Access-Control-Allow-Origin': req.headers.origin || '*',
       });
       return res.end(slice);
     }
@@ -854,6 +856,8 @@ router.get('/documents/:id/view', async (req, res) => {
     res.setHeader('Content-Length', buffer.length);
     res.setHeader('Cache-Control', 'private, max-age=86400');
     res.setHeader('ETag', `"${docMeta.checksumSha256 || docMeta.id}"`);
+    res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+    res.setHeader('Access-Control-Allow-Origin', req.headers.origin || '*');
     res.send(buffer);
   } catch (err) {
     res.status(500).json({ error: `View failed: ${err.message}` });
@@ -874,6 +878,8 @@ router.get('/documents/:id/thumbnail', async (req, res) => {
       res.setHeader('Content-Type', 'image/webp');
       res.setHeader('Cache-Control', 'private, max-age=604800, immutable');
       res.setHeader('Content-Length', cachedThumb.length);
+      res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+      res.setHeader('Access-Control-Allow-Origin', req.headers.origin || '*');
       return res.send(cachedThumb);
     }
 
@@ -913,6 +919,8 @@ router.get('/documents/:id/thumbnail', async (req, res) => {
       res.setHeader('Content-Type', 'image/webp');
       res.setHeader('Cache-Control', 'private, max-age=604800, immutable');
       res.setHeader('Content-Length', thumbBuf.length);
+      res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+      res.setHeader('Access-Control-Allow-Origin', req.headers.origin || '*');
       return res.send(thumbBuf);
     }
 
@@ -920,6 +928,8 @@ router.get('/documents/:id/thumbnail', async (req, res) => {
     res.setHeader('Content-Type', docMeta.mimeType || 'image/jpeg');
     res.setHeader('Cache-Control', 'private, max-age=86400');
     res.setHeader('Content-Length', buffer.length);
+    res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+    res.setHeader('Access-Control-Allow-Origin', req.headers.origin || '*');
     res.send(buffer);
   } catch (err) {
     console.warn(`[Thumbnail] Error for doc ${req.params.id}:`, err.message);
