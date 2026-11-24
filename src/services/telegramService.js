@@ -23,7 +23,7 @@ class TelegramService {
    */
   async uploadDocument(buffer, filename, caption = '') {
     let attempts = 0;
-    const maxAttempts = 2;
+    const maxAttempts = 3;
 
     while (attempts < maxAttempts) {
       attempts++;
@@ -72,6 +72,34 @@ class TelegramService {
           console.warn(`[Telegram Vault Recovery] Upload hit "chat not found" with ${this.chatId}. Auto-switching to verified vault channel -1003747303892.`);
           this.chatId = '-1003747303892';
           continue;
+        }
+
+        // Detect Telegram 429 Too Many Requests (Channel rate limit: max 20 msgs/min)
+        const isRateLimit =
+          err.response?.status === 429 ||
+          err.response?.data?.error_code === 429 ||
+          (typeof errDetail === 'string' && errDetail.toLowerCase().includes('too many requests'));
+
+        const retryAfter =
+          err.response?.data?.parameters?.retry_after ||
+          (typeof errDetail === 'string' && errDetail.match(/retry after (\d+)/i)
+            ? parseInt(errDetail.match(/retry after (\d+)/i)[1], 10)
+            : null);
+
+        if (isRateLimit) {
+          // If Telegram requested a short wait (<= 4s), wait and retry internally
+          if (retryAfter && retryAfter <= 4 && attempts < maxAttempts) {
+            console.warn(`[Telegram Service] Rate limit hit. Fast cooldown for ${retryAfter}s...`);
+            await new Promise((r) => setTimeout(r, (retryAfter + 1) * 1000));
+            continue;
+          }
+
+          // Otherwise, bubble 429 with retryAfter to caller so frontend can display live countdown without proxy timeouts
+          const rateErr = new Error(`Telegram rate limit: retry after ${retryAfter || 30}s`);
+          rateErr.isRateLimit = true;
+          rateErr.status = 429;
+          rateErr.retryAfter = retryAfter || 30;
+          throw rateErr;
         }
 
         if (attempts >= maxAttempts) {

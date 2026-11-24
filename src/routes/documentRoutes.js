@@ -1154,7 +1154,33 @@ const handleUpload = (req, res) => {
       });
     } catch (uploadErr) {
       console.error('Upload processing error:', uploadErr.message);
-      res.status(500).json({ error: uploadErr.message });
+
+      const isRateLimit =
+        uploadErr.isRateLimit ||
+        uploadErr.status === 429 ||
+        uploadErr.response?.status === 429 ||
+        (typeof uploadErr.message === 'string' && uploadErr.message.toLowerCase().includes('too many requests'));
+
+      if (isRateLimit) {
+        const retryAfter =
+          uploadErr.retryAfter ||
+          uploadErr.response?.data?.parameters?.retry_after ||
+          (typeof uploadErr.message === 'string' && uploadErr.message.match(/retry after (\d+)/i)
+            ? parseInt(uploadErr.message.match(/retry after (\d+)/i)[1], 10)
+            : 30);
+
+        return res.status(429).json({
+          error: `Telegram rate limit reached: retry after ${retryAfter}s.`,
+          isRateLimit: true,
+          retryAfter,
+          savedDocuments: createdDocs || [],
+        });
+      }
+
+      res.status(500).json({
+        error: uploadErr.message,
+        savedDocuments: createdDocs || [],
+      });
     }
   });
 };
