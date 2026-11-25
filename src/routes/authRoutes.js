@@ -11,6 +11,15 @@ const router = express.Router();
 // In-memory fallback if MongoDB is offline
 const memoryUsers = [];
 
+// Brief wait during Render cold-start so login/register don't race ahead of MongoDB connection
+const waitForMongoReady = async (maxWaitMs = 6000) => {
+  const start = Date.now();
+  while (!indexManager.isMongoConnected && Date.now() - start < maxWaitMs) {
+    await new Promise((r) => setTimeout(r, 250));
+  }
+  return indexManager.isMongoConnected;
+};
+
 /**
  * GET /api/auth/status - Check if system has users registered
  */
@@ -149,6 +158,8 @@ router.post('/login', async (req, res) => {
     }
 
     const cleanEmail = email.trim().toLowerCase();
+
+    await waitForMongoReady();
 
     let user = null;
     if (indexManager.isMongoConnected) {

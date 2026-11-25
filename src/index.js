@@ -69,11 +69,21 @@ app.use(express.urlencoded({ extended: true, limit: '25mb' }));
 app.use('/api/auth', require('./routes/authRoutes'));
 app.use('/api', documentRoutes);
 
-// Root health ping
+// Root & API health pings (for Render / UptimeRobot keep-alive)
 app.get('/', (req, res) => {
   res.json({
     app: 'TeleDoc Hub API',
     status: 'healthy',
+    mongoConnected: indexManager.isMongoConnected,
+    timestamp: new Date().toISOString()
+  });
+});
+
+app.get('/api/health', (req, res) => {
+  res.json({
+    ok: true,
+    status: 'healthy',
+    mongoConnected: indexManager.isMongoConnected,
     timestamp: new Date().toISOString()
   });
 });
@@ -99,22 +109,24 @@ const server = app.listen(config.port, async () => {
   console.log(`   Target Channel ID:    ${config.telegramChatId}`);
   console.log(`======================================================\n`);
 
-  try {
-    const tgCheck = await telegramService.testConnection();
-    if (tgCheck.connected) {
-      console.log(`✅ [Telegram Vault] Connected to channel: "${tgCheck.channel}" via bot @${tgCheck.bot}`);
-    } else {
-      console.error(`❌ [Telegram Vault] Connection Failed: ${tgCheck.error} (Chat ID: ${config.telegramChatId || 'NOT SET'})`);
-    }
-  } catch (tgErr) {
-    console.error(`❌ [Telegram Vault] Check error:`, tgErr.message);
-  }
-
-  try {
-    await indexManager.init();
-  } catch (err) {
-    console.error('[TeleDoc Hub] Boot initialization warning:', err.message);
-  }
+  // Run MongoDB initialization and Telegram check in parallel to minimize Render cold-start time
+  await Promise.allSettled([
+    indexManager.init().catch((err) => {
+      console.error('[TeleDoc Hub] Boot initialization warning:', err.message);
+    }),
+    telegramService
+      .testConnection()
+      .then((tgCheck) => {
+        if (tgCheck.connected) {
+          console.log(`✅ [Telegram Vault] Connected to channel: "${tgCheck.channel}" via bot @${tgCheck.bot}`);
+        } else {
+          console.error(`❌ [Telegram Vault] Connection Failed: ${tgCheck.error} (Chat ID: ${config.telegramChatId || 'NOT SET'})`);
+        }
+      })
+      .catch((tgErr) => {
+        console.error(`❌ [Telegram Vault] Check error:`, tgErr.message);
+      }),
+  ]);
 });
 
 module.exports = { app, server };
